@@ -1059,6 +1059,7 @@
                 }
             }
 
+            // First pass: Find all regions
             for (let y = 0; y < height; y++) {
                 for (let x = 0; x < width; x++) {
                     if (!visited[y * width + x] && layerData[(y * width + x) * 4 + 3]) {
@@ -1071,50 +1072,69 @@
 
             regions.sort((a, b) => b.length - a.length);
 
-            // Find small regions to replace
+            // Second pass: Process small regions
             for (let i = 0; i < regions.length; i++) {
                 if (regions[i].length < minSize) {
-                    // For each small region, find the nearest neighboring pixel
+                    // For each pixel in the small region
                     for (const [rx, ry] of regions[i]) {
-                        let nearestNeighbor = null;
+                        const rIdx = (ry * width + rx) * 4;
+                        let bestNeighbor = null;
                         let minDist = Infinity;
-                        
-                        // Check surrounding pixels to find a valid neighbor
-                        for (let dy = -3; dy <= 3; dy++) {
-                            for (let dx = -3; dx <= 3; dx++) {
-                                if (dx === 0 && dy === 0) continue;
-                                
-                                const nx = rx + dx;
-                                const ny = ry + dy;
-                                
-                                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                                    const nIdx = (ny * width + nx) * 4;
+                        let searchRadius = 10; // Increased search radius
+                        let found = false;
+
+                        // Try increasingly larger search areas until we find a valid neighbor
+                        while (!found && searchRadius <= 20) {
+                            for (let dy = -searchRadius; dy <= searchRadius; dy++) {
+                                for (let dx = -searchRadius; dx <= searchRadius; dx++) {
+                                    // Skip if it's the center pixel or we're not at the edge of our search area
+                                    if ((dx === 0 && dy === 0) || (Math.abs(dx) < searchRadius - 1 && Math.abs(dy) < searchRadius - 1)) {
+                                        continue;
+                                    }
                                     
-                                    // Only consider pixels that are visible and not part of this small region
-                                    if (layerData[nIdx + 3] && !regions[i].some(([px, py]) => px === nx && py === ny)) {
-                                        const dist = dx * dx + dy * dy;
-                                        if (dist < minDist) {
-                                            minDist = dist;
-                                            nearestNeighbor = [nx, ny];
+                                    const nx = rx + dx;
+                                    const ny = ry + dy;
+                                    
+                                    if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                                        const nIdx = (ny * width + nx) * 4;
+                                        
+                                        // Check if this neighbor is from a larger region and is visible
+                                        if (layerData[nIdx + 3] && !regions[i].some(([px, py]) => px === nx && py === ny)) {
+                                            const spatialDist = Math.sqrt(dx * dx + dy * dy);
+                                            // Color similarity check
+                                            const colorDist = Math.sqrt(
+                                                Math.pow(layerData[rIdx] - layerData[nIdx], 2) +
+                                                Math.pow(layerData[rIdx + 1] - layerData[nIdx + 1], 2) +
+                                                Math.pow(layerData[rIdx + 2] - layerData[nIdx + 2], 2)
+                                            );
+                                            
+                                            // Combined distance metric that considers both spatial and color similarity
+                                            const combinedDist = spatialDist + (colorDist / 255) * 10;
+                                            
+                                            if (combinedDist < minDist) {
+                                                minDist = combinedDist;
+                                                bestNeighbor = nIdx;
+                                                found = true;
+                                            }
                                         }
                                     }
                                 }
                             }
+                            searchRadius += 5;
                         }
                         
-                        // If we found a neighbor, copy its color
-                        if (nearestNeighbor) {
-                            const [nx, ny] = nearestNeighbor;
-                            const nIdx = (ny * width + nx) * 4;
-                            const rIdx = (ry * width + rx) * 4;
-                            
-                            newLayerData[rIdx] = layerData[nIdx];
-                            newLayerData[rIdx + 1] = layerData[nIdx + 1];
-                            newLayerData[rIdx + 2] = layerData[nIdx + 2];
-                            // Keep alpha as is
+                        if (bestNeighbor !== null) {
+                            // Copy the color from the best neighbor
+                            newLayerData[rIdx] = layerData[bestNeighbor];
+                            newLayerData[rIdx + 1] = layerData[bestNeighbor + 1];
+                            newLayerData[rIdx + 2] = layerData[bestNeighbor + 2];
+                            newLayerData[rIdx + 3] = layerData[bestNeighbor + 3];
                         } else {
-                            // If no neighbor found, make transparent
-                            newLayerData[(ry * width + rx) * 4 + 3] = 0;
+                            // If still no neighbor found, try to preserve the original color but with reduced alpha
+                            newLayerData[rIdx] = layerData[rIdx];
+                            newLayerData[rIdx + 1] = layerData[rIdx + 1];
+                            newLayerData[rIdx + 2] = layerData[rIdx + 2];
+                            newLayerData[rIdx + 3] = Math.max(20, layerData[rIdx + 3] * 0.5); // Preserve some visibility
                         }
                     }
                 }
